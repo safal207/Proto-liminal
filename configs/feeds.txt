@@ -1,0 +1,10 @@
+https://feeds.reuters.com/reuters/worldNews
+https://www.ft.com/?format=rss
+https://feeds.a.dj.com/rss/RSSWorldNews.xml
+https://apnews.com/hub/ap-top-news?format=xml
+https://www.bloomberg.com/politics/feeds/site.xml
+https://www.coindesk.com/arc/outboundfeeds/rss/?output=xml
+https://cointelegraph.com/rss
+https://www.ecb.europa.eu/rss/press.html
+https://www.marketwatch.com/feeds/topstories
+https://www.theguardian.com/world/rss
