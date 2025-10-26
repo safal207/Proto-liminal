@@ -5,3 +5,6 @@ numpy
 torch
 scikit-learn
 networkx
+cbor2
+websockets
+aiohttp
