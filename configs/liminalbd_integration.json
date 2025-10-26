@@ -1,0 +1,33 @@
+{
+  "liminalbd": {
+    "enabled": true,
+    "cli_path": "liminal-cli",
+    "mode": "subprocess",
+    "websocket_url": "ws://localhost:9001",
+    "impulse_defaults": {
+      "ttl_ms": 3600000,
+      "min_strength": 0.3,
+      "max_batch_size": 10
+    },
+    "event_subscription": {
+      "enabled": false,
+      "event_types": ["awaken", "introspect", "harmony"],
+      "reconnect_delay_ms": 5000
+    },
+    "signal_mapping": {
+      "sentiment_weight": 0.3,
+      "relevance_weight": 0.4,
+      "urgency_weight": 0.3
+    },
+    "harmony_integration": {
+      "enabled": false,
+      "rinse_trigger_threshold": 0.8,
+      "trs_sync_interval_ms": 60000
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "log_impulses": true,
+    "log_events": true
+  }
+}
