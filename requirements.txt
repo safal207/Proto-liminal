@@ -8,3 +8,7 @@ networkx
 cbor2
 websockets
 aiohttp
+spacy
+transformers
+vaderSentiment
+textblob
