@@ -12,3 +12,5 @@ spacy
 transformers
 vaderSentiment
 textblob
+langdetect
+pyarrow

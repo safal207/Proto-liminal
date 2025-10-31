@@ -32,6 +32,21 @@ pip install -r requirements.txt
 python src/collector.py --feeds configs/feeds.txt --out data/raw/news_$(date +%Y%m%d).jsonl --min-length 40 --max-items 1000
 ```
 
+### Normalize news (raw → clean)
+```bash
+python src/normalizer.py --inp 'data/raw/news_*.jsonl' --out data/clean/news_norm_$(date +%Y%m%d).jsonl --allow-lang en,ru --min-length 80 --dedup
+```
+
+### Build features (24h window)
+```bash
+python src/features_builder.py --inp 'data/clean/news_norm_*.jsonl' --out data/features/news_features.parquet --window-hours 24
+```
+
+### Predict (baseline)
+```bash
+python src/predictor.py --features data/features/news_features.parquet --out data/forecast/forecast_$(date +%Y%m%d%H).jsonl --event BTC_UP_24H_GT_2PCT
+```
+
 ## LiminalBD Integration
 
 Proto-liminal can integrate with [LiminalBD](https://github.com/safal207/LiminalBD) to leverage living cellular substrate for adaptive signal processing.

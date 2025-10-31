@@ -1,516 +1,259 @@
 """
 Module: predictor.py
-Purpose: Produce probabilistic forecasts with confidence intervals from signals
+Purpose: Baseline predictor using sigmoid model on VADER sentiment features
 Part of LIMINAL ProtoConsciousness MVP — see docs/MVP_SPEC.md
 """
-from __future__ import annotations
-
+import argparse
 import json
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+import math
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+from calibrator import load_calibrator, apply_calibration
 
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass
-class Forecast:
-    """Represents a probabilistic forecast"""
-    entity: str
-    probability: float  # Main probability (0-1)
-    confidence_interval: Tuple[float, float]  # (lower, upper) bounds
-    forecast_type: str  # "movement", "sentiment", "volatility"
-    horizon: str  # "1h", "6h", "24h", "7d"
-    timestamp: str
-    features_used: Dict[str, float]
-    model_confidence: float = 1.0
-    metadata: Dict = None
+class BaselinePredictor:
+    """Baseline sigmoid predictor for event probabilities"""
 
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
-
-        # Ensure probability is in valid range
-        self.probability = max(0.0, min(1.0, self.probability))
-
-        # Ensure confidence interval is valid
-        lower, upper = self.confidence_interval
-        lower = max(0.0, min(1.0, lower))
-        upper = max(0.0, min(1.0, upper))
-        self.confidence_interval = (lower, upper)
-
-    def to_dict(self) -> Dict:
-        return {
-            "entity": self.entity,
-            "probability": self.probability,
-            "confidence_interval": list(self.confidence_interval),
-            "forecast_type": self.forecast_type,
-            "horizon": self.horizon,
-            "timestamp": self.timestamp,
-            "features_used": self.features_used,
-            "model_confidence": self.model_confidence,
-            "metadata": self.metadata
-        }
-
-
-class BasePredictor:
-    """Base class for predictors"""
-
-    def __init__(self, model_type: str = "logistic"):
-        """
-        Initialize predictor
-
-        Args:
-            model_type: Type of model ("logistic", "random_forest", "simple")
-        """
-        self.model_type = model_type
-        self.model = None
-        self.scaler = StandardScaler()
-        self.is_fitted = False
-
-        # Initialize model
-        if model_type == "logistic":
-            self.model = LogisticRegression(random_state=42, max_iter=1000)
-        elif model_type == "random_forest":
-            self.model = RandomForestClassifier(
-                n_estimators=100,
-                random_state=42,
-                max_depth=10
-            )
-        elif model_type == "simple":
-            # Rule-based predictor (no training needed)
-            self.model = None
-            self.is_fitted = True
-
-        self.stats = {
-            "predictions_made": 0,
-            "entities_tracked": set()
-        }
-
-        LOGGER.info(f"Initialized {model_type} predictor")
-
-    def extract_feature_vector(self, signal: Dict) -> np.ndarray:
-        """
-        Extract feature vector from signal
-
-        Args:
-            signal: Signal dictionary
-
-        Returns:
-            Feature vector
-        """
-        features = signal.get("features", {})
-
-        # Core features
-        feature_vector = [
-            features.get("sentiment", 0.0),
-            features.get("sentiment_positive", 0.0),
-            features.get("sentiment_negative", 0.0),
-            features.get("relevance", 0.0),
-            features.get("urgency", 0.0),
-            features.get("mentions", 0.0),
-            features.get("confidence", 0.0),
-            features.get("text_length", 0.0),
-            signal.get("signal_strength", 0.0)
-        ]
-
-        return np.array(feature_vector)
-
-    def predict_probability_simple(self, signal: Dict) -> float:
-        """
-        Simple rule-based probability prediction
-
-        Uses signal strength and sentiment as main indicators
-        """
-        features = signal.get("features", {})
-        signal_strength = signal.get("signal_strength", 0.5)
-        sentiment = features.get("sentiment", 0.0)
-        relevance = features.get("relevance", 0.5)
-        urgency = features.get("urgency", 0.5)
-
-        # Positive movement probability
-        # Combines signal strength with sentiment direction
-        base_prob = signal_strength * 0.5  # 0-0.5 range
-
-        # Add sentiment component
-        if sentiment > 0:
-            base_prob += sentiment * 0.3
-        else:
-            base_prob += sentiment * 0.2  # Negative sentiment reduces probability
-
-        # Add urgency boost
-        base_prob += urgency * 0.15
-
-        # Add relevance component
-        base_prob += relevance * 0.05
-
-        return max(0.0, min(1.0, base_prob))
-
-    def calculate_confidence_interval(
+    def __init__(
         self,
-        probability: float,
-        signal: Dict,
-        width_factor: float = 0.15
-    ) -> Tuple[float, float]:
+        a: float = 2.0,
+        b: float = 0.5,
+        c: float = 0.5,
+        d: float = 0.2,
+        calibrator_path: Optional[str] = None
+    ):
         """
-        Calculate confidence interval for probability
+        Initialize baseline predictor
+
+        Formula: p_raw = sigmoid(a*compound_avg + b*pos - c*neg + d*log(1+count))
 
         Args:
-            probability: Point estimate
-            signal: Signal dictionary
-            width_factor: Base width of interval
-
-        Returns:
-            (lower, upper) bounds
+            a: Weight for compound sentiment
+            b: Weight for positive sentiment
+            c: Weight for negative sentiment
+            d: Weight for news count (log scaled)
+            calibrator_path: Path to calibrator model (optional)
         """
-        features = signal.get("features", {})
-        confidence = features.get("confidence", 0.7)
+        self.a = a
+        self.b = b
+        self.c = c
+        self.d = d
 
-        # Interval width inversely proportional to confidence
-        width = width_factor * (1.0 - confidence * 0.5)
+        # Load calibrator if available
+        self.calibrator = None
+        if calibrator_path:
+            self.calibrator = load_calibrator(calibrator_path)
 
-        lower = max(0.0, probability - width)
-        upper = min(1.0, probability + width)
+        LOGGER.info(f"Initialized BaselinePredictor (a={a}, b={b}, c={c}, d={d})")
 
-        return (lower, upper)
-
-    def predict_from_signal(
-        self,
-        signal: Dict,
-        horizon: str = "24h",
-        forecast_type: str = "movement"
-    ) -> Forecast:
+    def sigmoid(self, x: float) -> float:
         """
-        Generate forecast from a single signal
+        Sigmoid activation function
 
         Args:
-            signal: Signal dictionary
-            horizon: Forecast horizon
-            forecast_type: Type of forecast
+            x: Input value
 
         Returns:
-            Forecast object
+            Sigmoid output in [0, 1]
         """
-        entity = signal.get("entity", "Unknown")
-        features = signal.get("features", {})
+        try:
+            return 1.0 / (1.0 + math.exp(-x))
+        except OverflowError:
+            # Handle extreme values
+            return 0.0 if x < 0 else 1.0
 
-        # Get probability prediction
-        if self.model_type == "simple" or not self.is_fitted:
-            probability = self.predict_probability_simple(signal)
-            model_confidence = 0.6  # Lower confidence for simple model
-        else:
-            # Use trained model
-            feature_vector = self.extract_feature_vector(signal).reshape(1, -1)
-            feature_vector_scaled = self.scaler.transform(feature_vector)
-            probability = self.model.predict_proba(feature_vector_scaled)[0][1]
-            model_confidence = 0.8
+    def predict_raw(self, features: Dict) -> float:
+        """
+        Compute raw probability from features
 
-        # Calculate confidence interval
-        conf_interval = self.calculate_confidence_interval(probability, signal)
+        Args:
+            features: Feature dictionary with vader_* and count_news
 
-        # Create forecast
-        forecast = Forecast(
-            entity=entity,
-            probability=probability,
-            confidence_interval=conf_interval,
-            forecast_type=forecast_type,
-            horizon=horizon,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            features_used=features,
-            model_confidence=model_confidence,
-            metadata={
-                "signal_strength": signal.get("signal_strength", 0.0),
-                "signal_timestamp": signal.get("timestamp", ""),
-                "model_type": self.model_type
-            }
+        Returns:
+            Raw probability in [0, 1]
+        """
+        compound_avg = features.get('vader_compound_avg', 0.0)
+        pos = features.get('vader_pos', 0.0)
+        neg = features.get('vader_neg', 0.0)
+        count = features.get('count_news', 0)
+
+        # Compute logit
+        logit = (
+            self.a * compound_avg +
+            self.b * pos -
+            self.c * neg +
+            self.d * math.log(1 + count)
         )
 
-        self.stats["predictions_made"] += 1
-        self.stats["entities_tracked"].add(entity)
+        # Apply sigmoid
+        p_raw = self.sigmoid(logit)
+
+        return p_raw
+
+    def predict(self, features: Dict, event_id: str = "BTC_UP_24H_GT_2PCT") -> Dict:
+        """
+        Generate forecast from features
+
+        Args:
+            features: Feature dictionary
+            event_id: Event identifier
+
+        Returns:
+            Forecast dictionary
+        """
+        # Compute raw probability
+        p_raw = self.predict_raw(features)
+
+        # Apply calibration if available
+        p_calibrated = apply_calibration(p_raw, self.calibrator)
+
+        # Compute confidence band (simple heuristic based on sample size)
+        count = features.get('count_news', 0)
+        if count > 100:
+            margin = 0.1
+        elif count > 50:
+            margin = 0.15
+        elif count > 20:
+            margin = 0.2
+        else:
+            margin = 0.25
+
+        confidence_lower = max(0.0, p_calibrated - margin)
+        confidence_upper = min(1.0, p_calibrated + margin)
+
+        # Generate explanations
+        explanations = self.generate_explanations(features)
+
+        # Build forecast
+        forecast = {
+            'ts_generated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            'event_id': event_id,
+            'p_raw': round(p_raw, 4),
+            'p_calibrated': round(p_calibrated, 4),
+            'confidence_band': [round(confidence_lower, 4), round(confidence_upper, 4)],
+            'features': {
+                'vader_compound_avg': round(features.get('vader_compound_avg', 0.0), 4),
+                'vader_pos': round(features.get('vader_pos', 0.0), 4),
+                'vader_neg': round(features.get('vader_neg', 0.0), 4),
+                'count_news': features.get('count_news', 0),
+            },
+            'explain': explanations,
+        }
 
         return forecast
 
-    def predict_batch(
-        self,
-        signals: List[Dict],
-        horizon: str = "24h",
-        forecast_type: str = "movement"
-    ) -> List[Forecast]:
+    def generate_explanations(self, features: Dict) -> List[str]:
         """
-        Generate forecasts for multiple signals
+        Generate human-readable explanations
 
         Args:
-            signals: List of signal dictionaries
-            horizon: Forecast horizon
-            forecast_type: Type of forecast
+            features: Feature dictionary
 
         Returns:
-            List of Forecast objects
+            List of explanation strings
         """
-        forecasts = []
+        explanations = []
 
-        for signal in signals:
-            try:
-                forecast = self.predict_from_signal(signal, horizon, forecast_type)
-                forecasts.append(forecast)
-            except Exception as exc:
-                LOGGER.error(f"Error predicting for {signal.get('entity')}: {exc}")
+        compound_avg = features.get('vader_compound_avg', 0.0)
+        pos = features.get('vader_pos', 0.0)
+        neg = features.get('vader_neg', 0.0)
+        count = features.get('count_news', 0)
 
-        LOGGER.info(f"Generated {len(forecasts)} forecasts from {len(signals)} signals")
+        # Sentiment direction
+        if compound_avg > 0.1:
+            explanations.append("news sentiment ↑")
+        elif compound_avg < -0.1:
+            explanations.append("news sentiment ↓")
 
-        return forecasts
+        # Positive sentiment
+        if pos > 0.3:
+            explanations.append("high positive tone")
 
-    def process_jsonl(
-        self,
-        input_path: str,
-        output_path: str,
-        horizon: str = "24h",
-        forecast_type: str = "movement",
-        max_forecasts: int = 1000
-    ) -> Dict:
-        """
-        Process signals from JSONL and generate forecasts
+        # Negative sentiment
+        if neg > 0.3:
+            explanations.append("high negative tone")
 
-        Args:
-            input_path: Path to input signals JSONL
-            output_path: Path to output forecasts JSONL
-            horizon: Forecast horizon
-            forecast_type: Type of forecast
-            max_forecasts: Maximum forecasts to generate
+        # Volume
+        if count > 100:
+            explanations.append("volume of news ↑")
+        elif count < 20:
+            explanations.append("volume of news ↓")
 
-        Returns:
-            Processing statistics
-        """
-        from utils_io import ensure_parent_dir, safe_write_jsonl
-
-        ensure_parent_dir(output_path)
-
-        signals_processed = 0
-        forecasts_written = 0
-
-        with open(input_path, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                if forecasts_written >= max_forecasts:
-                    break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    signal = json.loads(line)
-                except json.JSONDecodeError:
-                    LOGGER.warning(f"Line {line_num}: Invalid JSON")
-                    continue
-
-                signals_processed += 1
-
-                # Generate forecast
-                try:
-                    forecast = self.predict_from_signal(signal, horizon, forecast_type)
-                    safe_write_jsonl(output_path, forecast.to_dict())
-                    forecasts_written += 1
-                except Exception as exc:
-                    LOGGER.error(f"Line {line_num}: Prediction error: {exc}")
-
-        summary = {
-            "signals_processed": signals_processed,
-            "forecasts_generated": forecasts_written,
-            "unique_entities": len(self.stats["entities_tracked"]),
-            "model_type": self.model_type
-        }
-
-        LOGGER.info(f"Forecast generation complete: {forecasts_written} forecasts from {signals_processed} signals")
-
-        return summary
-
-    def get_stats(self) -> Dict:
-        """Get predictor statistics"""
-        stats = self.stats.copy()
-        stats["entities_tracked"] = len(self.stats["entities_tracked"])
-        return stats
-
-
-class MovementPredictor(BasePredictor):
-    """Predicts entity price/value movement"""
-
-    def __init__(self, model_type: str = "simple"):
-        super().__init__(model_type)
-        LOGGER.info("MovementPredictor initialized")
-
-    def predict_from_signal(self, signal: Dict, horizon: str = "24h", forecast_type: str = "movement") -> Forecast:
-        """Predict movement probability"""
-        # Force forecast type to movement
-        return super().predict_from_signal(signal, horizon, "movement")
-
-
-class SentimentPredictor(BasePredictor):
-    """Predicts sentiment direction"""
-
-    def __init__(self, model_type: str = "simple"):
-        super().__init__(model_type)
-        LOGGER.info("SentimentPredictor initialized")
-
-    def predict_probability_simple(self, signal: Dict) -> float:
-        """Simple sentiment prediction"""
-        features = signal.get("features", {})
-        sentiment = features.get("sentiment", 0.0)
-
-        # Probability of positive sentiment
-        # Map from [-1, 1] to [0, 1]
-        probability = (sentiment + 1) / 2
-
-        return probability
-
-    def predict_from_signal(self, signal: Dict, horizon: str = "24h", forecast_type: str = "sentiment") -> Forecast:
-        """Predict sentiment probability"""
-        return super().predict_from_signal(signal, horizon, "sentiment")
-
-
-class VolatilityPredictor(BasePredictor):
-    """Predicts volatility/uncertainty"""
-
-    def __init__(self, model_type: str = "simple"):
-        super().__init__(model_type)
-        LOGGER.info("VolatilityPredictor initialized")
-
-    def predict_probability_simple(self, signal: Dict) -> float:
-        """Simple volatility prediction"""
-        features = signal.get("features", {})
-
-        # High volatility indicators:
-        # - Strong sentiment (positive or negative)
-        # - High urgency
-        # - Low confidence
-        sentiment_abs = abs(features.get("sentiment", 0.0))
-        urgency = features.get("urgency", 0.0)
-        confidence = features.get("confidence", 0.7)
-
-        # High volatility probability
-        volatility = (
-            sentiment_abs * 0.4 +
-            urgency * 0.4 +
-            (1.0 - confidence) * 0.2
-        )
-
-        return min(1.0, volatility)
-
-    def predict_from_signal(self, signal: Dict, horizon: str = "24h", forecast_type: str = "volatility") -> Forecast:
-        """Predict volatility probability"""
-        return super().predict_from_signal(signal, horizon, "volatility")
-
-
-class MultiPredictor:
-    """Combines multiple predictors"""
-
-    def __init__(self, model_type: str = "simple"):
-        """Initialize all predictor types"""
-        self.movement = MovementPredictor(model_type)
-        self.sentiment = SentimentPredictor(model_type)
-        self.volatility = VolatilityPredictor(model_type)
-
-        LOGGER.info("MultiPredictor initialized with all forecast types")
-
-    def predict_all(self, signal: Dict, horizon: str = "24h") -> Dict[str, Forecast]:
-        """
-        Generate all forecast types for a signal
-
-        Returns:
-            Dictionary mapping forecast type to Forecast
-        """
-        return {
-            "movement": self.movement.predict_from_signal(signal, horizon),
-            "sentiment": self.sentiment.predict_from_signal(signal, horizon),
-            "volatility": self.volatility.predict_from_signal(signal, horizon)
-        }
-
-    def process_jsonl(
-        self,
-        input_path: str,
-        output_path: str,
-        horizon: str = "24h",
-        forecast_types: List[str] = None,
-        max_forecasts: int = 1000
-    ) -> Dict:
-        """
-        Process signals and generate all forecast types
-
-        Args:
-            input_path: Path to input signals JSONL
-            output_path: Path to output forecasts JSONL
-            horizon: Forecast horizon
-            forecast_types: List of types to generate (default: all)
-            max_forecasts: Maximum forecasts per type
-
-        Returns:
-            Processing statistics
-        """
-        from utils_io import ensure_parent_dir, safe_write_jsonl
-
-        if forecast_types is None:
-            forecast_types = ["movement", "sentiment", "volatility"]
-
-        ensure_parent_dir(output_path)
-
-        signals_processed = 0
-        total_forecasts = 0
-
-        with open(input_path, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                if total_forecasts >= max_forecasts * len(forecast_types):
-                    break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    signal = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                signals_processed += 1
-
-                # Generate all forecast types
-                all_forecasts = self.predict_all(signal, horizon)
-
-                for ftype in forecast_types:
-                    if ftype in all_forecasts:
-                        forecast = all_forecasts[ftype]
-                        safe_write_jsonl(output_path, forecast.to_dict())
-                        total_forecasts += 1
-
-        summary = {
-            "signals_processed": signals_processed,
-            "forecasts_generated": total_forecasts,
-            "forecast_types": forecast_types,
-            "forecasts_per_type": total_forecasts // len(forecast_types) if forecast_types else 0
-        }
-
-        LOGGER.info(f"Multi-forecast generation complete: {total_forecasts} forecasts from {signals_processed} signals")
-
-        return summary
+        return explanations if explanations else ["neutral indicators"]
 
 
 def main():
-    """CLI interface for forecasting"""
-    import argparse
+    """CLI interface for predictor"""
+    parser = argparse.ArgumentParser(
+        description="Baseline predictor for event probabilities",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Example:
+  python src/predictor.py \\
+    --features data/features/news_features.parquet \\
+    --out data/forecast/forecast_$(date +%Y%m%d%H).jsonl \\
+    --event BTC_UP_24H_GT_2PCT
+        """
+    )
 
-    parser = argparse.ArgumentParser(description="Generate forecasts from signals")
-    parser.add_argument("--input", required=True, help="Input signals JSONL file")
-    parser.add_argument("--output", required=True, help="Output forecasts JSONL")
-    parser.add_argument("--horizon", default="24h", help="Forecast horizon")
-    parser.add_argument("--type", default="movement", choices=["movement", "sentiment", "volatility", "all"])
-    parser.add_argument("--model", default="simple", choices=["simple", "logistic", "random_forest"])
-    parser.add_argument("--max-forecasts", type=int, default=1000, dest="max_forecasts")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        '--features',
+        required=True,
+        help='Input Parquet file with features'
+    )
+    parser.add_argument(
+        '--out',
+        required=True,
+        help='Output JSONL file for forecasts'
+    )
+    parser.add_argument(
+        '--event',
+        default='BTC_UP_24H_GT_2PCT',
+        help='Event ID (default: BTC_UP_24H_GT_2PCT)'
+    )
+    parser.add_argument(
+        '--calibrator',
+        help='Path to calibrator model (optional)'
+    )
+    parser.add_argument(
+        '-a',
+        type=float,
+        default=2.0,
+        help='Weight for compound sentiment (default: 2.0)'
+    )
+    parser.add_argument(
+        '-b',
+        type=float,
+        default=0.5,
+        help='Weight for positive sentiment (default: 0.5)'
+    )
+    parser.add_argument(
+        '-c',
+        type=float,
+        default=0.5,
+        help='Weight for negative sentiment (default: 0.5)'
+    )
+    parser.add_argument(
+        '-d',
+        type=float,
+        default=0.2,
+        help='Weight for log(count) (default: 0.2)'
+    )
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
 
     args = parser.parse_args()
 
@@ -521,36 +264,73 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
 
-    # Create predictor
-    if args.type == "all":
-        predictor = MultiPredictor(model_type=args.model)
-    elif args.type == "movement":
-        predictor = MovementPredictor(model_type=args.model)
-    elif args.type == "sentiment":
-        predictor = SentimentPredictor(model_type=args.model)
-    else:  # volatility
-        predictor = VolatilityPredictor(model_type=args.model)
+    # Check pandas availability
+    if pd is None:
+        LOGGER.error("pandas is required. Install with: pip install pandas pyarrow")
+        return 1
 
-    # Process
-    summary = predictor.process_jsonl(
-        input_path=args.input,
-        output_path=args.output,
-        horizon=args.horizon,
-        max_forecasts=args.max_forecasts
+    # Load features
+    LOGGER.info(f"Loading features from {args.features}")
+
+    try:
+        df = pd.read_parquet(args.features)
+        LOGGER.info(f"Loaded {len(df)} feature records")
+    except FileNotFoundError:
+        LOGGER.error(f"Features file not found: {args.features}")
+        return 1
+    except Exception as exc:
+        LOGGER.error(f"Error loading features: {exc}")
+        return 1
+
+    if len(df) == 0:
+        LOGGER.error("No features to process")
+        return 1
+
+    # Initialize predictor
+    predictor = BaselinePredictor(
+        a=args.a,
+        b=args.b,
+        c=args.c,
+        d=args.d,
+        calibrator_path=args.calibrator
     )
 
+    # Create output directory
+    output_dir = Path(args.out).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate forecasts
+    LOGGER.info("Generating forecasts")
+    forecasts = []
+
+    for idx, row in df.iterrows():
+        features = row.to_dict()
+        forecast = predictor.predict(features, event_id=args.event)
+        forecasts.append(forecast)
+
+    # Write to JSONL
+    with open(args.out, 'w', encoding='utf-8') as f:
+        for forecast in forecasts:
+            f.write(json.dumps(forecast, ensure_ascii=False) + '\n')
+
+    LOGGER.info(f"Wrote {len(forecasts)} forecasts to {args.out}")
+
     # Print summary
-    print("\n" + "="*60)
-    print("Forecast Generation Summary")
-    print("="*60)
-    print(f"Signals processed:    {summary['signals_processed']}")
-    print(f"Forecasts generated:  {summary['forecasts_generated']}")
-    if 'forecast_types' in summary:
-        print(f"Forecast types:       {', '.join(summary['forecast_types'])}")
-        print(f"Forecasts per type:   {summary['forecasts_per_type']}")
-    print(f"Model type:           {args.model}")
-    print(f"Horizon:              {args.horizon}")
+    print("\n" + "=" * 60)
+    print("Predictor Summary")
+    print("=" * 60)
+    print(f"Input features:       {len(df)}")
+    print(f"Forecasts generated:  {len(forecasts)}")
+    print(f"Event ID:             {args.event}")
+    print(f"Model params:         a={args.a}, b={args.b}, c={args.c}, d={args.d}")
+    print(f"Output file:          {args.out}")
+
+    if forecasts:
+        avg_prob = sum(f['p_calibrated'] for f in forecasts) / len(forecasts)
+        print(f"Avg probability:      {avg_prob:.2%}")
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())
