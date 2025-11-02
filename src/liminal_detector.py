@@ -113,7 +113,18 @@ class LiminalDetector:
         hist_mean = np.mean(self.volatility_history)
         hist_std = np.std(self.volatility_history)
 
+        # Handle edge case: all historical values identical
         if hist_std == 0:
+            # If new value differs significantly from constant history, it's a spike
+            if abs(current_volatility - hist_mean) > 0.1:
+                strength = 1.0  # Maximum strength for obvious spike
+                self.volatility_history.append(current_volatility)
+                return LiminalSignal(
+                    signal_type="volatility_spike",
+                    strength=strength,
+                    description=f"Volatility spike: {current_volatility:.4f} (sudden change from constant {hist_mean:.4f})",
+                    timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+                )
             self.volatility_history.append(current_volatility)
             return None
 
