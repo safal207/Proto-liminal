@@ -174,6 +174,154 @@ trades = portfolio.rebalance(
 python examples/demo_adaptive_risk.py
 ```
 
+## Real-Time Market Monitoring
+
+Proto-liminal supports real-time market monitoring through integration with **Tradernet WebSocket API**, enabling live liminal state detection and adaptive risk management.
+
+### Features
+
+- 📡 **Live Quote Streaming**: Real-time market data from Tradernet WebSocket (`wss://wssdev.tradernet.dev`)
+- 🔍 **Real-Time Liminal Detection**: Detect market transitions as they happen
+- 🎯 **Market Regime Classification**: Continuous bull/bear/sideways/transition detection
+- ⚠️ **Critical State Alerts**: Automatic alerts when markets enter critical liminal states
+- 📊 **Multi-Symbol Monitoring**: Track multiple assets simultaneously
+- 💾 **JSONL Logging**: All snapshots and alerts saved for analysis
+
+### Quick Start
+
+**Test WebSocket connection:**
+```bash
+python examples/test_tradernet_connection.py
+```
+
+**Start real-time monitor:**
+```bash
+# Monitor default symbols (AAPL, TSLA, BTCUSD)
+python src/realtime_monitor.py
+
+# Monitor custom symbols
+python src/realtime_monitor.py --symbols AAPL MSFT GOOGL BTCUSD ETHUSD
+
+# Disable quote logging
+python src/realtime_monitor.py --no-log
+
+# Verbose mode
+python src/realtime_monitor.py --symbols TSLA BTCUSD --verbose
+```
+
+### Python API
+
+```python
+import asyncio
+from tradernet_client import TradernetClient, TradernetConfig
+
+# Configure client
+config = TradernetConfig(
+    url="wss://wssdev.tradernet.dev",
+    symbols=["AAPL", "TSLA", "BTCUSD"]
+)
+
+client = TradernetClient(config)
+
+# Callback for quotes
+def on_quote(quote):
+    print(f"{quote.symbol}: ${quote.price:.2f}")
+
+client.register_quote_callback(on_quote)
+
+# Run with auto-reconnect
+await client.run_with_reconnect()
+```
+
+### Output Files
+
+Monitor generates two JSONL files in `data/`:
+
+**1. `realtime_snapshots.jsonl`** - All market snapshots:
+```json
+{
+  "symbol": "AAPL",
+  "timestamp": "2025-11-02T14:30:00Z",
+  "price": 178.45,
+  "liminal_state": "liminal",
+  "liminal_score": 0.72,
+  "market_regime": "transition",
+  "regime_confidence": 0.68,
+  "volatility": 0.0234,
+  "risk_adjustment": 0.35,
+  "alert_level": "warning"
+}
+```
+
+**2. `realtime_alerts.jsonl`** - Critical state alerts:
+```json
+{
+  "timestamp": "2025-11-02T14:32:15Z",
+  "symbol": "BTCUSD",
+  "alert_type": "CRITICAL_LIMINAL_STATE",
+  "details": {
+    "liminal_score": 0.87,
+    "regime": "transition",
+    "volatility": 0.0456,
+    "risk_adjustment": 0.20,
+    "recommendation": "REDUCE_EXPOSURE"
+  }
+}
+```
+
+### Console Output
+
+Real-time monitor displays colored status for each quote:
+
+```
+🟢 AAPL     $  178.45 | 🐂 bull       | Liminal: 0.12 | Vol: 0.0123 | Risk Adj: 1.00x
+🟡 TSLA     $  245.67 | 🔄 transition | Liminal: 0.68 | Vol: 0.0345 | Risk Adj: 0.35x
+🔴 BTCUSD   $42567.89 | 🐻 bear       | Liminal: 0.89 | Vol: 0.0523 | Risk Adj: 0.20x
+```
+
+- 🟢 **Stable state** - Normal market conditions
+- 🟡 **Liminal state** - Warning, increased uncertainty
+- 🔴 **Critical state** - High risk, major transition likely
+
+### Architecture
+
+```
+Tradernet WebSocket (wss://wssdev.tradernet.dev)
+           ↓
+   TradernetClient (src/tradernet_client.py)
+           ↓
+   RealtimeMonitor (src/realtime_monitor.py)
+           ↓
+   ┌──────────────────────────────────────────┐
+   │  LiminalDetector   MarketRegime          │
+   │  RiskManager       Portfolio             │
+   └──────────────────────────────────────────┘
+           ↓
+   JSONL Logs + Console Output + Alerts
+```
+
+### Integration with Existing Pipeline
+
+Real-time data can feed into the existing RINSE cycle:
+
+```python
+from realtime_monitor import RealtimeMonitor
+from rinse_agent import RinseAgent
+
+# Start real-time monitor
+monitor = RealtimeMonitor(symbols=["BTCUSD"])
+
+# Connect to RINSE agent
+rinse = RinseAgent()
+
+async def on_snapshot(snapshot):
+    # Feed real-time data into RINSE cycle
+    if snapshot.liminal_state == "critical":
+        await rinse.reflect_on_state(snapshot)
+
+await monitor.run()
+```
+
 ## LiminalBD Integration
 
 Proto-liminal can integrate with [LiminalBD](https://github.com/safal207/LiminalBD) to leverage living cellular substrate for adaptive signal processing.
