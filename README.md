@@ -47,6 +47,58 @@ python src/features_builder.py --inp 'data/clean/news_norm_*.jsonl' --out data/f
 python src/predictor.py --features data/features/news_features.parquet --out data/forecast/forecast_$(date +%Y%m%d%H).jsonl --event BTC_UP_24H_GT_2PCT
 ```
 
+### Detect liminal states (transition detection)
+```bash
+python examples/demo_liminal_detection.py
+```
+
+## Liminal State Detection
+
+Proto-liminal includes **adaptive risk management** through real-time detection of **liminal (transitional) market states**.
+
+**What are liminal states?**
+- 🌊 Moments of transition between market regimes (bull → bear, stable → volatile)
+- ⚠️ Periods of uncertainty where traditional models break down
+- 🎭 Phase transitions that require adaptive strategy adjustment
+
+**How it works:**
+```python
+from liminal_detector import LiminalDetector
+from market_regime import MarketRegimeClassifier
+
+# Initialize detectors
+liminal_detector = LiminalDetector()
+regime_classifier = MarketRegimeClassifier()
+
+# Detect current state
+liminal_state = liminal_detector.detect(
+    sentiment=0.3,
+    volatility=0.8,  # High volatility
+    volume=250       # Volume spike
+)
+
+# Classify regime
+regime = regime_classifier.classify(price=45000, sentiment=0.3)
+
+# Adaptive risk management
+if liminal_state.state == "critical":
+    position_size *= 0.2  # Reduce risk by 80%
+elif liminal_state.state == "liminal":
+    position_size *= 0.5  # Reduce risk by 50%
+```
+
+**Signals detected:**
+- 📊 **Volatility spikes** — sudden changes in price movement
+- 🔄 **Sentiment flips** — rapid reversal in market mood
+- 📈 **Volume anomalies** — unusual trading/news activity
+- ⚡ **Indicator conflicts** — contradictory signals
+
+**Regimes classified:**
+- 📈 **Bull** — upward trending market
+- 📉 **Bear** — downward trending market
+- ↔️ **Sideways** — range-bound market
+- 🔄 **Transition** — regime change in progress
+
 ## LiminalBD Integration
 
 Proto-liminal can integrate with [LiminalBD](https://github.com/safal207/LiminalBD) to leverage living cellular substrate for adaptive signal processing.
