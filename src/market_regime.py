@@ -301,9 +301,10 @@ class MarketRegimeClassifier:
                 momentum = 0.0
 
         # Detect transition
-        recent_trends = [self.calculate_trend(list(self.price_history)[i:i+10])
-                        for i in range(0, max(1, len(self.price_history) - 10), 5)
-                        if len(self.price_history[i:i+10]) >= 5]
+        price_list = list(self.price_history)
+        recent_trends = [self.calculate_trend(price_list[i:i+10])
+                        for i in range(0, max(1, len(price_list) - 10), 5)
+                        if len(price_list[i:i+10]) >= 5]
 
         is_transition = self.detect_transition(trend, recent_trends) if recent_trends else False
 

@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.log
 .env
+
+# Demo output files
+data/*_demo.jsonl
