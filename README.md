@@ -99,6 +99,81 @@ elif liminal_state.state == "liminal":
 - ↔️ **Sideways** — range-bound market
 - 🔄 **Transition** — regime change in progress
 
+## Adaptive Risk Management
+
+Proto-liminal features **intelligent risk management** that adapts to market conditions in real-time.
+
+**Key Features:**
+- 💎 **Kelly Criterion** — optimal position sizing based on probabilities
+- 🎯 **Liminal Adjustment** — dynamic risk reduction during transitions
+- 🛡️ **Circuit Breakers** — automatic trading halt at max drawdown
+- 📊 **Regime-Based Allocation** — portfolio weights adapt to market regime
+- ⚡ **Dynamic Stop Loss** — ATR-based stops that adjust to volatility
+
+**How it works:**
+```python
+from risk_manager import AdaptiveRiskManager, RiskParameters
+from portfolio_manager import AdaptivePortfolioManager
+
+# Initialize risk manager
+risk_params = RiskParameters(
+    max_risk_per_trade=0.02,  # 2% max risk per trade
+    kelly_fraction=0.25,       # Use 1/4 Kelly for safety
+    max_drawdown_limit=0.20    # Halt at 20% drawdown
+)
+risk_manager = AdaptiveRiskManager(params=risk_params)
+
+# Calculate position size with liminal adjustment
+position_sizing = risk_manager.calculate_position_size(
+    symbol='BTC',
+    entry_price=50000.0,
+    direction='long',
+    forecast=forecast,           # From predictor
+    liminal_state=liminal_state, # From detector
+    regime=regime,               # From classifier
+    atr=1000.0
+)
+
+print(f"Kelly size: ${position_sizing.kelly_size:,.2f}")
+print(f"Adjusted size: ${position_sizing.adjusted_size:,.2f}")
+print(f"Liminal adjustment: {position_sizing.liminal_adjustment:.2f}x")
+print(f"Stop loss: ${position_sizing.stop_loss_price:,.2f}")
+
+# Portfolio management with regime-based allocation
+portfolio = AdaptivePortfolioManager(initial_cash=10000.0)
+
+# Rebalance based on regime
+trades = portfolio.rebalance(
+    regime=regime,
+    liminal_state=liminal_state,
+    forecasts={'BTC': forecast, 'ETH': forecast},
+    prices={'BTC': 50000.0, 'ETH': 3000.0}
+)
+```
+
+**Risk Adjustment Matrix:**
+
+| State / Regime | Stable | Liminal | Critical |
+|----------------|--------|---------|----------|
+| **Bull**       | 100%   | 50%     | 20%      |
+| **Sideways**   | 80%    | 40%     | 20%      |
+| **Transition** | 60%    | 30%     | 20%      |
+| **Bear**       | 50%    | 30%     | 20%      |
+
+**Portfolio Allocation by Regime:**
+
+| Regime       | Equity | Cash |
+|--------------|--------|------|
+| **Bull**     | 70%    | 30%  |
+| **Bear**     | 30%    | 70%  |
+| **Sideways** | 50%    | 50%  |
+| **Transition** | 40%  | 60%  |
+
+**Run adaptive risk demo:**
+```bash
+python examples/demo_adaptive_risk.py
+```
+
 ## LiminalBD Integration
 
 Proto-liminal can integrate with [LiminalBD](https://github.com/safal207/LiminalBD) to leverage living cellular substrate for adaptive signal processing.
