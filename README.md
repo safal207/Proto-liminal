@@ -180,7 +180,7 @@ Proto-liminal supports real-time market monitoring through integration with **Tr
 
 ### Features
 
-- 📡 **Live Quote Streaming**: Real-time market data from Tradernet WebSocket (`wss://wssdev.tradernet.dev`)
+- 📡 **Live Quote Streaming**: Real-time market data from Tradernet WebSocket (`wss://wss.tradernet.com`)
 - 🔍 **Real-Time Liminal Detection**: Detect market transitions as they happen
 - 🎯 **Market Regime Classification**: Continuous bull/bear/sideways/transition detection
 - ⚠️ **Critical State Alerts**: Automatic alerts when markets enter critical liminal states
@@ -189,18 +189,22 @@ Proto-liminal supports real-time market monitoring through integration with **Tr
 
 ### Quick Start
 
-**Test WebSocket connection:**
+**Run demo (no auth required):**
 ```bash
-python examples/test_tradernet_connection.py
+# Simulated real-time feed with full functionality
+python examples/demo_realtime_simulated.py
 ```
 
-**Start real-time monitor:**
+**Connect to real Tradernet (requires user_id):**
 ```bash
-# Monitor default symbols (AAPL, TSLA, BTCUSD)
-python src/realtime_monitor.py
+# Get your user_id from tradernet.com account
+# Edit src/tradernet_realtime_client.py with your user_id
+python src/tradernet_realtime_client.py
+```
 
-# Monitor custom symbols
-python src/realtime_monitor.py --symbols AAPL MSFT GOOGL BTCUSD ETHUSD
+**Test different connection methods:**
+```bash
+python examples/test_tradernet_variants.py
 
 # Disable quote logging
 python src/realtime_monitor.py --no-log
@@ -213,15 +217,16 @@ python src/realtime_monitor.py --symbols TSLA BTCUSD --verbose
 
 ```python
 import asyncio
-from tradernet_client import TradernetClient, TradernetConfig
+from tradernet_realtime_client import TradernetWebSocketClient, TradernetConfig
 
 # Configure client
 config = TradernetConfig(
-    url="wss://wssdev.tradernet.dev",
-    symbols=["AAPL", "TSLA", "BTCUSD"]
+    url="wss://wss.tradernet.com",
+    user_id="YOUR_USER_ID",  # Get from tradernet.com account
+    symbols=["GAZP", "SBER", "AAPL"]
 )
 
-client = TradernetClient(config)
+client = TradernetWebSocketClient(config)
 
 # Callback for quotes
 def on_quote(quote):
@@ -229,9 +234,16 @@ def on_quote(quote):
 
 client.register_quote_callback(on_quote)
 
-# Run with auto-reconnect
-await client.run_with_reconnect()
+# Run for 60 seconds
+await client.run(duration=60)
 ```
+
+**Protocol:**
+- **Subscribe**: `["quotes", ["GAZP", "SBER", "AAPL"]]`
+- **OrderBook**: `["orderBook", ["GAZP"]]`
+- **Unsubscribe**: `["quotes", []]`
+
+**Setup guide**: See [docs/TRADERNET_SETUP.md](docs/TRADERNET_SETUP.md)
 
 ### Output Files
 
