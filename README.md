@@ -32,6 +32,148 @@ pip install -r requirements.txt
 python src/collector.py --feeds configs/feeds.txt --out data/raw/news_$(date +%Y%m%d).jsonl --min-length 40 --max-items 1000
 ```
 
+### Normalize news (raw → clean)
+```bash
+python src/normalizer.py --inp 'data/raw/news_*.jsonl' --out data/clean/news_norm_$(date +%Y%m%d).jsonl --allow-lang en,ru --min-length 80 --dedup
+```
+
+### Build features (24h window)
+```bash
+python src/features_builder.py --inp 'data/clean/news_norm_*.jsonl' --out data/features/news_features.parquet --window-hours 24
+```
+
+### Predict (baseline)
+```bash
+python src/predictor.py --features data/features/news_features.parquet --out data/forecast/forecast_$(date +%Y%m%d%H).jsonl --event BTC_UP_24H_GT_2PCT
+```
+
+### Detect liminal states (transition detection)
+```bash
+python examples/demo_liminal_detection.py
+```
+
+## Liminal State Detection
+
+Proto-liminal includes **adaptive risk management** through real-time detection of **liminal (transitional) market states**.
+
+**What are liminal states?**
+- 🌊 Moments of transition between market regimes (bull → bear, stable → volatile)
+- ⚠️ Periods of uncertainty where traditional models break down
+- 🎭 Phase transitions that require adaptive strategy adjustment
+
+**How it works:**
+```python
+from liminal_detector import LiminalDetector
+from market_regime import MarketRegimeClassifier
+
+# Initialize detectors
+liminal_detector = LiminalDetector()
+regime_classifier = MarketRegimeClassifier()
+
+# Detect current state
+liminal_state = liminal_detector.detect(
+    sentiment=0.3,
+    volatility=0.8,  # High volatility
+    volume=250       # Volume spike
+)
+
+# Classify regime
+regime = regime_classifier.classify(price=45000, sentiment=0.3)
+
+# Adaptive risk management
+if liminal_state.state == "critical":
+    position_size *= 0.2  # Reduce risk by 80%
+elif liminal_state.state == "liminal":
+    position_size *= 0.5  # Reduce risk by 50%
+```
+
+**Signals detected:**
+- 📊 **Volatility spikes** — sudden changes in price movement
+- 🔄 **Sentiment flips** — rapid reversal in market mood
+- 📈 **Volume anomalies** — unusual trading/news activity
+- ⚡ **Indicator conflicts** — contradictory signals
+
+**Regimes classified:**
+- 📈 **Bull** — upward trending market
+- 📉 **Bear** — downward trending market
+- ↔️ **Sideways** — range-bound market
+- 🔄 **Transition** — regime change in progress
+
+## Adaptive Risk Management
+
+Proto-liminal features **intelligent risk management** that adapts to market conditions in real-time.
+
+**Key Features:**
+- 💎 **Kelly Criterion** — optimal position sizing based on probabilities
+- 🎯 **Liminal Adjustment** — dynamic risk reduction during transitions
+- 🛡️ **Circuit Breakers** — automatic trading halt at max drawdown
+- 📊 **Regime-Based Allocation** — portfolio weights adapt to market regime
+- ⚡ **Dynamic Stop Loss** — ATR-based stops that adjust to volatility
+
+**How it works:**
+```python
+from risk_manager import AdaptiveRiskManager, RiskParameters
+from portfolio_manager import AdaptivePortfolioManager
+
+# Initialize risk manager
+risk_params = RiskParameters(
+    max_risk_per_trade=0.02,  # 2% max risk per trade
+    kelly_fraction=0.25,       # Use 1/4 Kelly for safety
+    max_drawdown_limit=0.20    # Halt at 20% drawdown
+)
+risk_manager = AdaptiveRiskManager(params=risk_params)
+
+# Calculate position size with liminal adjustment
+position_sizing = risk_manager.calculate_position_size(
+    symbol='BTC',
+    entry_price=50000.0,
+    direction='long',
+    forecast=forecast,           # From predictor
+    liminal_state=liminal_state, # From detector
+    regime=regime,               # From classifier
+    atr=1000.0
+)
+
+print(f"Kelly size: ${position_sizing.kelly_size:,.2f}")
+print(f"Adjusted size: ${position_sizing.adjusted_size:,.2f}")
+print(f"Liminal adjustment: {position_sizing.liminal_adjustment:.2f}x")
+print(f"Stop loss: ${position_sizing.stop_loss_price:,.2f}")
+
+# Portfolio management with regime-based allocation
+portfolio = AdaptivePortfolioManager(initial_cash=10000.0)
+
+# Rebalance based on regime
+trades = portfolio.rebalance(
+    regime=regime,
+    liminal_state=liminal_state,
+    forecasts={'BTC': forecast, 'ETH': forecast},
+    prices={'BTC': 50000.0, 'ETH': 3000.0}
+)
+```
+
+**Risk Adjustment Matrix:**
+
+| State / Regime | Stable | Liminal | Critical |
+|----------------|--------|---------|----------|
+| **Bull**       | 100%   | 50%     | 20%      |
+| **Sideways**   | 80%    | 40%     | 20%      |
+| **Transition** | 60%    | 30%     | 20%      |
+| **Bear**       | 50%    | 30%     | 20%      |
+
+**Portfolio Allocation by Regime:**
+
+| Regime       | Equity | Cash |
+|--------------|--------|------|
+| **Bull**     | 70%    | 30%  |
+| **Bear**     | 30%    | 70%  |
+| **Sideways** | 50%    | 50%  |
+| **Transition** | 40%  | 60%  |
+
+**Run adaptive risk demo:**
+```bash
+python examples/demo_adaptive_risk.py
+```
+
 ## LiminalBD Integration
 
 Proto-liminal can integrate with [LiminalBD](https://github.com/safal207/LiminalBD) to leverage living cellular substrate for adaptive signal processing.
