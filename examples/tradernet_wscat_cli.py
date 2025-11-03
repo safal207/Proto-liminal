@@ -67,7 +67,7 @@ def _load_message(args: argparse.Namespace) -> str | None:
         return args.execute
 
     if not args.no_default_payload and args.tickers:
-        payload = ["quotes", args.tickers]
+        payload = [args.default_command, args.tickers]
         return json.dumps(payload, ensure_ascii=False)
 
     return None
@@ -211,6 +211,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         nargs="*",
         default=DEFAULT_TICKERS,
         help="Ticker symbols for the default subscribeQuotes payload.",
+    )
+    parser.add_argument(
+        "--default-command",
+        choices=["quotes", "orderBook"],
+        default="quotes",
+        help=(
+            "Command emitted by the automatic payload. Use 'orderBook' to "
+            "subscribe to depth updates."
+        ),
     )
     parser.add_argument(
         "--no-default-payload",

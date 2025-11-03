@@ -62,10 +62,11 @@ python examples/tradernet_wscat_cli.py -c \
 ```
 
 By default the helper sends the same `["quotes", ["..."]]` payload described
-above.  Disable the automatic message with `--no-default-payload` if you just
-want to test the handshake.  The CLI mirrors `wscat` flags for sending custom
-payloads (`-x`, `-f`) and respects optional headers (`-H`), cookies, and proxy
-settings.
+above.  Pass `--default-command orderBook` to automatically request depth data
+instead, or disable the automatic message entirely with `--no-default-payload`
+if you just want to test the handshake.  The CLI mirrors `wscat` flags for
+sending custom payloads (`-x`, `-f`) and respects optional headers (`-H`),
+cookies, and proxy settings.
 
 The legacy `examples/tradernet_ws_client.py` module is still available for more
 verbose experiments with granular logging controls.
