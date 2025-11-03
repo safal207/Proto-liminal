@@ -67,8 +67,8 @@ def _load_message(args: argparse.Namespace) -> str | None:
         return args.execute
 
     if not args.no_default_payload and args.tickers:
-        payload = {"cmd": "subscribeQuotes", "tickers": args.tickers}
-        return json.dumps(payload)
+        payload = ["quotes", args.tickers]
+        return json.dumps(payload, ensure_ascii=False)
 
     return None
 

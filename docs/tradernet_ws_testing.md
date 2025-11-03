@@ -1,43 +1,74 @@
 # Tradernet WebSocket testing helpers
 
-To mirror the original request of "проверить через cli wcat" the repository now
-ships with `examples/tradernet_wscat_cli.py`, a lightweight drop-in replacement
-for the popular `wscat` tool.  For more verbose Python-based experiments the
-previous `examples/tradernet_ws_client.py` module is still available.
+The original request was to "проверить через cli wcat", so this guide now starts
+with the canonical Node.js workflow before documenting the Python helpers that
+ship with the repository.
 
-## Quick start
+## Using the real `wscat`
+
+1. **Install the tool** (requires Node.js):
+
+   ```bash
+   npm install -g wscat
+   ```
+
+2. **Connect to Tradernet** (replace the `user_id` with your value):
+
+   ```bash
+   wscat -c "wss://wss.tradernet.com/?user_id=3400204"
+   ```
+
+   Use the test server by swapping the host:
+
+   ```bash
+   wscat -c "wss://wssdev.tradernet.dev/?user_id=3400204"
+   ```
+
+3. **Subscribe to quotes** once the prompt appears.  Enter the following JSON
+   array and press <kbd>Enter</kbd>:
+
+   ```text
+   ["quotes", ["GAZP", "SBER", "AAPL"]]
+   ```
+
+   For order-book depth data, send:
+
+   ```text
+   ["orderBook", ["GAZP"]]
+   ```
+
+4. **Watch the stream**.  Incoming messages will be displayed as JSON blobs.
+
+5. **Unsubscribe** from all quotes by sending:
+
+   ```text
+   ["quotes", []]
+   ```
+
+If the handshake fails, double-check VPN/firewall rules, supply the correct
+`user_id`, and ensure any required authentication cookies are passed via repeated
+`-H "Cookie: ..."` parameters.
+
+## Python-based alternative (`tradernet_wscat_cli.py`)
+
+The repo still provides a minimal Python reimplementation for sandboxes where
+installing Node.js is inconvenient:
 
 ```bash
 python examples/tradernet_wscat_cli.py -c \
     "wss://wss.tradernet.com/?user_id=3400204" \
     -H "Origin: https://app.tradernet.com" \
-    -x '{"cmd": "subscribeQuotes", "tickers": ["GAZP", "SBER", "AAPL"]}' \
     --no-stdin
 ```
 
-The command connects, sends a `subscribeQuotes` request for the supplied
-tickers and then streams any incoming JSON payloads to stdout.  Interactive mode
-is enabled by default (just like `wscat`); the `--no-stdin` flag is handy when
-running in a non-interactive environment.
+By default the helper sends the same `["quotes", ["..."]]` payload described
+above.  Disable the automatic message with `--no-default-payload` if you just
+want to test the handshake.  The CLI mirrors `wscat` flags for sending custom
+payloads (`-x`, `-f`) and respects optional headers (`-H`), cookies, and proxy
+settings.
 
-The server often requires additional cookies or authorisation headers.  You can
-mimic the headers normally issued by a browser session with repeated `-H/--header`
-flags:
-
-```bash
-python examples/tradernet_wscat_cli.py --user-id 3400204 \
-    -H "Cookie: session=<token>" \
-    -H "X-Requested-With: XMLHttpRequest"
-```
-
-If you already use `wscat`, you can provide identical payloads with the familiar
-`-x` option or load them from disk via `-f/--execute-file`.  The helper sends a
-`subscribeQuotes` payload by default; use `--no-default-payload` when you want a
-pure handshake without any messages being transmitted automatically.
-
-The legacy `tradernet_ws_client.py` helper exposes similar functionality via
-explicit `--payload` and `--payload-file` options while also supporting
-additional logging controls for debugging.
+The legacy `examples/tradernet_ws_client.py` module is still available for more
+verbose experiments with granular logging controls.
 
 ## Handling handshake failures
 
@@ -54,18 +85,3 @@ The `--proxy` option controls how the script deals with network proxies:
 
 Adjusting the proxy settings can be necessary if your shell is already routed
 through a corporate or sandbox proxy.
-
-## Comparing with wscat
-
-For parity with the original user request, the behaviour roughly corresponds to
-running the real `wscat` utility:
-
-```bash
-wscat -c "wss://wss.tradernet.com/?user_id=3400204" \
-    -H "Origin: https://app.tradernet.com" \
-    -H "User-Agent: Mozilla/5.0 (compatible; ProtoLiminalBot/1.0)" \
-    -x '{"cmd": "subscribeQuotes", "tickers": ["GAZP", "SBER", "AAPL"]}'
-```
-
-The Python implementations provide additional logging and exception handling, so
-it is easier to diagnose issues when the upstream server rejects the connection.
