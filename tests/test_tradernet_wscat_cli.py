@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
+import socket
 import sys
 from pathlib import Path
+from typing import Awaitable, Callable, Dict, List
 
-import argparse
+import pytest
+import websockets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,4 +59,125 @@ def test_no_default_payload() -> None:
     message = cli._load_message(args)
 
     assert message is None
+
+
+def _run_with_local_server(
+    port: int,
+    handler: Callable[["websockets.asyncio.server.ServerConnection"], Awaitable[None]],
+    args: argparse.Namespace,
+) -> None:
+    """Run the CLI client against a provided local WebSocket server."""
+
+    async def _runner() -> None:
+        async with websockets.serve(handler, "127.0.0.1", port):
+            await cli._run_client(args)
+
+    asyncio.run(_runner())
+
+
+def _build_base_args(*extra: str) -> argparse.Namespace:
+    """Helper that prepares CLI arguments for local testing."""
+
+    # Always disable stdin and proxy auto-detection for deterministic tests.
+    return parse_args("--no-stdin", "--proxy", "none", "--ping-interval", "0", *extra)
+
+
+def _allocate_port() -> int:
+    """Allocate an ephemeral TCP port for localhost tests."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def test_run_client_fetches_quotes(capsys: pytest.CaptureFixture[str]) -> None:
+    """The client should send a quotes subscription and stream pretty JSON data."""
+
+    received_messages: List[str] = []
+    handshake_headers: Dict[str, str] = {}
+
+    async def handler(conn: "websockets.asyncio.server.ServerConnection") -> None:
+        handshake_headers["Origin"] = conn.request.headers.get("Origin", "")
+        handshake_headers["User-Agent"] = conn.request.headers.get("User-Agent", "")
+        payload = await conn.recv()
+        received_messages.append(payload)
+        await conn.send(
+            json.dumps(
+                {"type": "quote", "ticker": "GAZP", "price": 123.45},
+                ensure_ascii=False,
+            )
+        )
+        await conn.close()
+
+    port = _allocate_port()
+
+    args = _build_base_args(
+        "--connect",
+        f"ws://127.0.0.1:{port}",
+        "--tickers",
+        "GAZP",
+        "--origin",
+        "https://example.test",
+        "--user-agent",
+        "UnitTestAgent/1.0",
+        "--pretty-json",
+    )
+
+    _run_with_local_server(port, handler, args)
+
+    captured = capsys.readouterr()
+    output = captured.out.strip()
+
+    assert json.loads(received_messages[0]) == ["quotes", ["GAZP"]]
+    assert json.loads(output) == {"type": "quote", "ticker": "GAZP", "price": 123.45}
+    assert handshake_headers == {
+        "Origin": "https://example.test",
+        "User-Agent": "UnitTestAgent/1.0",
+    }
+
+
+def test_run_client_fetches_order_book(capsys: pytest.CaptureFixture[str]) -> None:
+    """The client should request order book updates and stream raw JSON responses."""
+
+    received_messages: List[str] = []
+
+    async def handler(conn: "websockets.asyncio.server.ServerConnection") -> None:
+        payload = await conn.recv()
+        received_messages.append(payload)
+        await conn.send(
+            json.dumps(
+                {
+                    "type": "orderBook",
+                    "ticker": "SBER",
+                    "bid": [[281.3, 100]],
+                    "ask": [[281.5, 80]],
+                },
+                ensure_ascii=False,
+            )
+        )
+        await conn.close()
+
+    port = _allocate_port()
+
+    args = _build_base_args(
+        "--connect",
+        f"ws://127.0.0.1:{port}",
+        "--tickers",
+        "SBER",
+        "--default-command",
+        "orderBook",
+    )
+
+    _run_with_local_server(port, handler, args)
+
+    captured = capsys.readouterr()
+    output = captured.out.strip()
+
+    assert json.loads(received_messages[0]) == ["orderBook", ["SBER"]]
+    assert json.loads(output) == {
+        "type": "orderBook",
+        "ticker": "SBER",
+        "bid": [[281.3, 100]],
+        "ask": [[281.5, 80]],
+    }
 
