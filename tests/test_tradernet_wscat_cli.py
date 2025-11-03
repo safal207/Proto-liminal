@@ -181,3 +181,76 @@ def test_run_client_fetches_order_book(capsys: pytest.CaptureFixture[str]) -> No
         "ask": [[281.5, 80]],
     }
 
+
+def test_cli_streams_multiple_messages(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify the CLI mirrors the raw JSON stream seen in the wscat screenshot."""
+
+    received_messages: List[str] = []
+
+    responses = [
+        {
+            "userData": {
+                "mode": "demo",
+                "marketDataDelay": "fast",
+                "subscription": {
+                    "model": "rm",
+                    "portfolio": "demo",
+                    "balance": 12345.67,
+                },
+            }
+        },
+        {
+            "quotes": {
+                "BTC/USD": {
+                    "Chg": 0.0,
+                    "ChgP": 0.0,
+                    "Pc": 100.0,
+                    "Last": 100.0,
+                    "LastBuy": 100.0,
+                    "High": 101.0,
+                    "Low": 99.0,
+                    "Volume": 42,
+                }
+            }
+        },
+        {
+            "quotes": {
+                "ETH/USD": {
+                    "Chg": -4.08,
+                    "ChgP": -3.8,
+                    "Pc": 1500.0,
+                    "Last": 1443.83,
+                    "LastBuy": 1443.83,
+                    "High": 1550.0,
+                    "Low": 1400.0,
+                    "Volume": 314,
+                }
+            }
+        },
+    ]
+
+    async def handler(conn: "websockets.asyncio.server.ServerConnection") -> None:
+        payload = await conn.recv()
+        received_messages.append(payload)
+        for response in responses:
+            await conn.send(json.dumps(response, ensure_ascii=False))
+        await conn.close()
+
+    port = _allocate_port()
+
+    args = _build_base_args(
+        "--connect",
+        f"ws://127.0.0.1:{port}",
+        "--tickers",
+        "BTC/USD",
+        "ETH/USD",
+    )
+
+    _run_with_local_server(port, handler, args)
+
+    captured = capsys.readouterr()
+    output_lines = [line for line in captured.out.splitlines() if line.strip()]
+
+    assert json.loads(received_messages[0]) == ["quotes", ["BTC/USD", "ETH/USD"]]
+    assert output_lines == [json.dumps(response, ensure_ascii=False) for response in responses]
+
