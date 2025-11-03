@@ -187,47 +187,7 @@ def test_cli_streams_multiple_messages(capsys: pytest.CaptureFixture[str]) -> No
 
     received_messages: List[str] = []
 
-    responses = [
-        {
-            "userData": {
-                "mode": "demo",
-                "marketDataDelay": "fast",
-                "subscription": {
-                    "model": "rm",
-                    "portfolio": "demo",
-                    "balance": 12345.67,
-                },
-            }
-        },
-        {
-            "quotes": {
-                "BTC/USD": {
-                    "Chg": 0.0,
-                    "ChgP": 0.0,
-                    "Pc": 100.0,
-                    "Last": 100.0,
-                    "LastBuy": 100.0,
-                    "High": 101.0,
-                    "Low": 99.0,
-                    "Volume": 42,
-                }
-            }
-        },
-        {
-            "quotes": {
-                "ETH/USD": {
-                    "Chg": -4.08,
-                    "ChgP": -3.8,
-                    "Pc": 1500.0,
-                    "Last": 1443.83,
-                    "LastBuy": 1443.83,
-                    "High": 1550.0,
-                    "Low": 1400.0,
-                    "Volume": 314,
-                }
-            }
-        },
-    ]
+    responses = list(cli.DEMO_STREAMS["screenshot"]["responses"])
 
     async def handler(conn: "websockets.asyncio.server.ServerConnection") -> None:
         payload = await conn.recv()
@@ -253,4 +213,22 @@ def test_cli_streams_multiple_messages(capsys: pytest.CaptureFixture[str]) -> No
 
     assert json.loads(received_messages[0]) == ["quotes", ["BTC/USD", "ETH/USD"]]
     assert output_lines == [json.dumps(response, ensure_ascii=False) for response in responses]
+
+
+def test_demo_stream_quotes(capsys: pytest.CaptureFixture[str]) -> None:
+    """Running the CLI in demo mode should replay deterministic quote updates."""
+
+    args = _build_base_args("--demo-stream", "quotes")
+
+    asyncio.run(cli._run_demo(args))
+
+    captured = capsys.readouterr()
+    output_lines = [line for line in captured.out.splitlines() if line.strip()]
+
+    expected = [
+        json.dumps(response, ensure_ascii=False)
+        for response in cli.DEMO_STREAMS["quotes"]["responses"]
+    ]
+
+    assert output_lines == expected
 

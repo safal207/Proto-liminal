@@ -71,6 +71,25 @@ cookies, and proxy settings.
 The legacy `examples/tradernet_ws_client.py` module is still available for more
 verbose experiments with granular logging controls.
 
+### Offline demo mode
+
+When the real Tradernet endpoint is unreachable (for example, during automated
+tests that run in a restricted network), use the built-in demo streams to verify
+that the CLI still pushes a subscription and renders incoming data:
+
+```bash
+python examples/tradernet_wscat_cli.py --demo-stream screenshot --no-stdin
+```
+
+The command starts a local WebSocket server, sends the default
+`["quotes", ["BTC/USD", "ETH/USD"]]` subscription, and replays the same
+responses that appear in the regression screenshot-based test.  Additional demo
+streams are available:
+
+- `quotes` – quick sanity check that emits two spot quotes (`GAZP`, `SBER`).
+- `orderBook` – single depth update for `SBER`.
+- `screenshot` – multi-message session mirroring the documented example output.
+
 ## Handling handshake failures
 
 In the managed execution environment used for automated evaluation the WebSocket

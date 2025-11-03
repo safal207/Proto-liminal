@@ -25,8 +25,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import socket
 import sys
-from typing import Dict, Iterable
+from typing import Any, Dict, Iterable, List, TypedDict
 
 import websockets
 from websockets.exceptions import InvalidStatus, InvalidURI
@@ -34,6 +35,101 @@ from websockets.exceptions import InvalidStatus, InvalidURI
 DEFAULT_ORIGIN = "https://app.tradernet.com"
 DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; ProtoLiminalBot/1.0)"
 DEFAULT_TICKERS = ["GAZP", "SBER", "AAPL"]
+
+
+class DemoStream(TypedDict):
+    tickers: List[str]
+    command: str
+    responses: List[Dict[str, Any]]
+
+
+DEMO_STREAMS: Dict[str, DemoStream] = {
+    "quotes": {
+        "tickers": ["GAZP", "SBER"],
+        "command": "quotes",
+        "responses": [
+            {
+                "quotes": {
+                    "GAZP": {
+                        "Last": 123.45,
+                        "Chg": 1.23,
+                        "ChgP": 1.01,
+                        "Pc": 122.22,
+                        "Volume": 1000,
+                    }
+                }
+            },
+            {
+                "quotes": {
+                    "SBER": {
+                        "Last": 281.5,
+                        "Chg": -0.7,
+                        "ChgP": -0.25,
+                        "Pc": 282.2,
+                        "Volume": 540,
+                    }
+                }
+            },
+        ],
+    },
+    "orderBook": {
+        "tickers": ["SBER"],
+        "command": "orderBook",
+        "responses": [
+            {
+                "type": "orderBook",
+                "ticker": "SBER",
+                "bid": [[281.3, 100], [281.2, 80]],
+                "ask": [[281.5, 90], [281.6, 70]],
+            }
+        ],
+    },
+    "screenshot": {
+        "tickers": ["BTC/USD", "ETH/USD"],
+        "command": "quotes",
+        "responses": [
+            {
+                "userData": {
+                    "mode": "demo",
+                    "marketDataDelay": "fast",
+                    "subscription": {
+                        "model": "rm",
+                        "portfolio": "demo",
+                        "balance": 12345.67,
+                    },
+                }
+            },
+            {
+                "quotes": {
+                    "BTC/USD": {
+                        "Chg": 0.0,
+                        "ChgP": 0.0,
+                        "Pc": 100.0,
+                        "Last": 100.0,
+                        "LastBuy": 100.0,
+                        "High": 101.0,
+                        "Low": 99.0,
+                        "Volume": 42,
+                    }
+                }
+            },
+            {
+                "quotes": {
+                    "ETH/USD": {
+                        "Chg": -4.08,
+                        "ChgP": -3.8,
+                        "Pc": 1500.0,
+                        "Last": 1443.83,
+                        "LastBuy": 1443.83,
+                        "High": 1550.0,
+                        "Low": 1400.0,
+                        "Volume": 314,
+                    }
+                }
+            },
+        ],
+    },
+}
 
 
 def _parse_header_arguments(values: Iterable[str]) -> Dict[str, str]:
@@ -159,6 +255,61 @@ async def _run_client(args: argparse.Namespace) -> None:
         logging.error("Network error: %s", exc)
 
 
+def _allocate_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+async def _run_demo(args: argparse.Namespace) -> None:
+    stream = DEMO_STREAMS[args.demo_stream]
+
+    if args.no_default_payload:
+        logging.error("Demo streams require an automatic subscription payload.")
+        return
+
+    if args.execute or args.execute_file:
+        logging.error("Demo streams cannot be combined with explicit --execute payloads.")
+        return
+
+    if args.tickers == DEFAULT_TICKERS:
+        args.tickers = list(stream["tickers"])
+    elif sorted(args.tickers) != sorted(stream["tickers"]):
+        logging.warning(
+            "Overriding provided tickers %s with demo defaults %s.",
+            args.tickers,
+            stream["tickers"],
+        )
+        args.tickers = list(stream["tickers"])
+
+    args.default_command = stream["command"]
+
+    port = _allocate_port()
+    args.connect = f"ws://127.0.0.1:{port}"
+    if args.proxy == "auto":
+        args.proxy = "none"
+
+    responses: List[str] = [
+        json.dumps(response, ensure_ascii=False) for response in stream["responses"]
+    ]
+
+    async def handler(conn: "websockets.asyncio.server.ServerConnection") -> None:
+        payload = await conn.recv()
+        logging.info("Demo server received subscription: %s", payload)
+        for response in responses:
+            await conn.send(response)
+        await conn.close()
+
+    logging.info(
+        "Starting local demo server for '%s' stream on %s.",
+        args.demo_stream,
+        args.connect,
+    )
+
+    async with websockets.serve(handler, "127.0.0.1", port):
+        await _run_client(args)
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Minimal `wscat` replacement focused on Tradernet testing.",
@@ -251,6 +402,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--demo-stream",
+        choices=sorted(DEMO_STREAMS.keys()),
+        help=(
+            "Start a local demo server and replay deterministic Tradernet "
+            "payloads to verify the CLI end-to-end."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Logging verbosity (DEBUG, INFO, WARNING, ERROR).",
@@ -271,7 +430,10 @@ def main() -> None:
     )
 
     try:
-        asyncio.run(_run_client(args))
+        if args.demo_stream:
+            asyncio.run(_run_demo(args))
+        else:
+            asyncio.run(_run_client(args))
     except KeyboardInterrupt:
         logging.info("Interrupted by user.")
 
