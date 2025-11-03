@@ -189,41 +189,42 @@ Proto-liminal supports real-time market monitoring through integration with **Tr
 
 ### Quick Start
 
-**Run demo (no auth required):**
+**⚠️ Note:** Real-time WebSocket requires running locally (not in sandbox). See [docs/TRADERNET_LOCAL_SETUP.md](docs/TRADERNET_LOCAL_SETUP.md)
+
+**Option 1: Simulated Demo (Works Anywhere)**
 ```bash
-# Simulated real-time feed with full functionality
+# Full functionality without WebSocket connection
 python examples/demo_realtime_simulated.py
 ```
 
-**Connect to real Tradernet (requires user_id):**
+**Option 2: Live Connection (Run Locally)**
 ```bash
-# Get your user_id from tradernet.com account
-# Edit src/tradernet_realtime_client.py with your user_id
-python src/tradernet_realtime_client.py
+# 1. Test connection first
+python examples/tradernet_live_test.py
+
+# 2. Run live client
+python src/tradernet_demo_client.py
 ```
 
-**Test different connection methods:**
+**Verify with wscat:**
 ```bash
-python examples/test_tradernet_variants.py
+wscat -c "wss://wss.tradernet.com/"
+# Expected: ["userData", {...}, "wstm=..."]
 
-# Disable quote logging
-python src/realtime_monitor.py --no-log
-
-# Verbose mode
-python src/realtime_monitor.py --symbols TSLA BTCUSD --verbose
+# Subscribe to quotes:
+> ["quotes", ["BTC/USD", "ETH/USD", "GAZP"]]
 ```
 
 ### Python API
 
 ```python
 import asyncio
-from tradernet_realtime_client import TradernetWebSocketClient, TradernetConfig
+from src.tradernet_demo_client import TradernetWebSocketClient, TradernetConfig
 
-# Configure client
+# Configure client (demo mode - no auth needed!)
 config = TradernetConfig(
-    url="wss://wss.tradernet.com",
-    user_id="YOUR_USER_ID",  # Get from tradernet.com account
-    symbols=["GAZP", "SBER", "AAPL"]
+    url="wss://wss.tradernet.com/",
+    symbols=["BTC/USD", "ETH/USD", "GAZP", "SBER"]
 )
 
 client = TradernetWebSocketClient(config)
@@ -234,16 +235,19 @@ def on_quote(quote):
 
 client.register_quote_callback(on_quote)
 
-# Run for 60 seconds
+# Run
 await client.run(duration=60)
 ```
 
 **Protocol:**
-- **Subscribe**: `["quotes", ["GAZP", "SBER", "AAPL"]]`
+- **Connect**: `wss://wss.tradernet.com/` (demo mode)
+- **Subscribe**: `["quotes", ["BTC/USD", "ETH/USD", "GAZP"]]`
 - **OrderBook**: `["orderBook", ["GAZP"]]`
 - **Unsubscribe**: `["quotes", []]`
 
-**Setup guide**: See [docs/TRADERNET_SETUP.md](docs/TRADERNET_SETUP.md)
+**Message format:** `[messageType, data, "wstm=timestamp"]`
+
+**Setup guide**: See [docs/TRADERNET_LOCAL_SETUP.md](docs/TRADERNET_LOCAL_SETUP.md)
 
 ### Output Files
 
