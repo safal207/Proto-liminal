@@ -1,33 +1,43 @@
-# Tradernet WebSocket testing client
+# Tradernet WebSocket testing helpers
 
-This repository now includes `examples/tradernet_ws_client.py`, a small helper
-script that mirrors the features of the `wscat` command line utility.  The
-script is useful when you need to experiment with the public Tradernet socket
-`wss://wss.tradernet.com/?user_id=<ID>` while running inside a restricted
-environment where installing Node.js tooling is inconvenient.
+To mirror the original request of "проверить через cli wcat" the repository now
+ships with `examples/tradernet_wscat_cli.py`, a lightweight drop-in replacement
+for the popular `wscat` tool.  For more verbose Python-based experiments the
+previous `examples/tradernet_ws_client.py` module is still available.
 
 ## Quick start
 
 ```bash
-python examples/tradernet_ws_client.py --user-id 3400204 \
-    --tickers GAZP SBER AAPL
+python examples/tradernet_wscat_cli.py -c \
+    "wss://wss.tradernet.com/?user_id=3400204" \
+    -H "Origin: https://app.tradernet.com" \
+    -x '{"cmd": "subscribeQuotes", "tickers": ["GAZP", "SBER", "AAPL"]}' \
+    --no-stdin
 ```
 
-The command attempts to connect, sends a `subscribeQuotes` request for the
-supplied tickers and then streams any incoming JSON payloads to stdout.
+The command connects, sends a `subscribeQuotes` request for the supplied
+tickers and then streams any incoming JSON payloads to stdout.  Interactive mode
+is enabled by default (just like `wscat`); the `--no-stdin` flag is handy when
+running in a non-interactive environment.
 
 The server often requires additional cookies or authorisation headers.  You can
-mimic the headers normally issued by a browser session with repeated `--header`
+mimic the headers normally issued by a browser session with repeated `-H/--header`
 flags:
 
 ```bash
-python examples/tradernet_ws_client.py --user-id 3400204 \
-    --header "Cookie: session=<token>" \
-    --header "X-Requested-With: XMLHttpRequest"
+python examples/tradernet_wscat_cli.py --user-id 3400204 \
+    -H "Cookie: session=<token>" \
+    -H "X-Requested-With: XMLHttpRequest"
 ```
 
-If you already use `wscat`, you can provide identical payloads via the
-`--payload` argument or load them from a JSON file with `--payload-file`.
+If you already use `wscat`, you can provide identical payloads with the familiar
+`-x` option or load them from disk via `-f/--execute-file`.  The helper sends a
+`subscribeQuotes` payload by default; use `--no-default-payload` when you want a
+pure handshake without any messages being transmitted automatically.
+
+The legacy `tradernet_ws_client.py` helper exposes similar functionality via
+explicit `--payload` and `--payload-file` options while also supporting
+additional logging controls for debugging.
 
 ## Handling handshake failures
 
@@ -48,7 +58,7 @@ through a corporate or sandbox proxy.
 ## Comparing with wscat
 
 For parity with the original user request, the behaviour roughly corresponds to
-running:
+running the real `wscat` utility:
 
 ```bash
 wscat -c "wss://wss.tradernet.com/?user_id=3400204" \
@@ -57,5 +67,5 @@ wscat -c "wss://wss.tradernet.com/?user_id=3400204" \
     -x '{"cmd": "subscribeQuotes", "tickers": ["GAZP", "SBER", "AAPL"]}'
 ```
 
-The Python implementation provides additional logging and exception handling, so
+The Python implementations provide additional logging and exception handling, so
 it is easier to diagnose issues when the upstream server rejects the connection.
