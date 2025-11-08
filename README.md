@@ -174,6 +174,170 @@ trades = portfolio.rebalance(
 python examples/demo_adaptive_risk.py
 ```
 
+## Real-Time Market Monitoring
+
+Proto-liminal supports real-time market monitoring through integration with **Tradernet WebSocket API**, enabling live liminal state detection and adaptive risk management.
+
+### Features
+
+- 📡 **Live Quote Streaming**: Real-time market data from Tradernet WebSocket (`wss://wss.tradernet.com`)
+- 🔍 **Real-Time Liminal Detection**: Detect market transitions as they happen
+- 🎯 **Market Regime Classification**: Continuous bull/bear/sideways/transition detection
+- ⚠️ **Critical State Alerts**: Automatic alerts when markets enter critical liminal states
+- 📊 **Multi-Symbol Monitoring**: Track multiple assets simultaneously
+- 💾 **JSONL Logging**: All snapshots and alerts saved for analysis
+
+### Quick Start
+
+**⚠️ Note:** Real-time WebSocket requires running locally (not in sandbox). See [docs/TRADERNET_LOCAL_SETUP.md](docs/TRADERNET_LOCAL_SETUP.md)
+
+**Option 1: Simulated Demo (Works Anywhere)**
+```bash
+# Full functionality without WebSocket connection
+python examples/demo_realtime_simulated.py
+```
+
+**Option 2: Live Connection (Run Locally)**
+```bash
+# 1. Test connection first
+python examples/tradernet_live_test.py
+
+# 2. Run live client
+python src/tradernet_demo_client.py
+```
+
+**Verify with wscat:**
+```bash
+wscat -c "wss://wss.tradernet.com/"
+# Expected: ["userData", {...}, "wstm=..."]
+
+# Subscribe to quotes:
+> ["quotes", ["BTC/USD", "ETH/USD", "GAZP"]]
+```
+
+### Python API
+
+```python
+import asyncio
+from src.tradernet_demo_client import TradernetWebSocketClient, TradernetConfig
+
+# Configure client (demo mode - no auth needed!)
+config = TradernetConfig(
+    url="wss://wss.tradernet.com/",
+    symbols=["BTC/USD", "ETH/USD", "GAZP", "SBER"]
+)
+
+client = TradernetWebSocketClient(config)
+
+# Callback for quotes
+def on_quote(quote):
+    print(f"{quote.symbol}: ${quote.price:.2f}")
+
+client.register_quote_callback(on_quote)
+
+# Run
+await client.run(duration=60)
+```
+
+**Protocol:**
+- **Connect**: `wss://wss.tradernet.com/` (demo mode)
+- **Subscribe**: `["quotes", ["BTC/USD", "ETH/USD", "GAZP"]]`
+- **OrderBook**: `["orderBook", ["GAZP"]]`
+- **Unsubscribe**: `["quotes", []]`
+
+**Message format:** `[messageType, data, "wstm=timestamp"]`
+
+**Setup guide**: See [docs/TRADERNET_LOCAL_SETUP.md](docs/TRADERNET_LOCAL_SETUP.md)
+
+### Output Files
+
+Monitor generates two JSONL files in `data/`:
+
+**1. `realtime_snapshots.jsonl`** - All market snapshots:
+```json
+{
+  "symbol": "AAPL",
+  "timestamp": "2025-11-02T14:30:00Z",
+  "price": 178.45,
+  "liminal_state": "liminal",
+  "liminal_score": 0.72,
+  "market_regime": "transition",
+  "regime_confidence": 0.68,
+  "volatility": 0.0234,
+  "risk_adjustment": 0.35,
+  "alert_level": "warning"
+}
+```
+
+**2. `realtime_alerts.jsonl`** - Critical state alerts:
+```json
+{
+  "timestamp": "2025-11-02T14:32:15Z",
+  "symbol": "BTCUSD",
+  "alert_type": "CRITICAL_LIMINAL_STATE",
+  "details": {
+    "liminal_score": 0.87,
+    "regime": "transition",
+    "volatility": 0.0456,
+    "risk_adjustment": 0.20,
+    "recommendation": "REDUCE_EXPOSURE"
+  }
+}
+```
+
+### Console Output
+
+Real-time monitor displays colored status for each quote:
+
+```
+🟢 AAPL     $  178.45 | 🐂 bull       | Liminal: 0.12 | Vol: 0.0123 | Risk Adj: 1.00x
+🟡 TSLA     $  245.67 | 🔄 transition | Liminal: 0.68 | Vol: 0.0345 | Risk Adj: 0.35x
+🔴 BTCUSD   $42567.89 | 🐻 bear       | Liminal: 0.89 | Vol: 0.0523 | Risk Adj: 0.20x
+```
+
+- 🟢 **Stable state** - Normal market conditions
+- 🟡 **Liminal state** - Warning, increased uncertainty
+- 🔴 **Critical state** - High risk, major transition likely
+
+### Architecture
+
+```
+Tradernet WebSocket (wss://wssdev.tradernet.dev)
+           ↓
+   TradernetClient (src/tradernet_client.py)
+           ↓
+   RealtimeMonitor (src/realtime_monitor.py)
+           ↓
+   ┌──────────────────────────────────────────┐
+   │  LiminalDetector   MarketRegime          │
+   │  RiskManager       Portfolio             │
+   └──────────────────────────────────────────┘
+           ↓
+   JSONL Logs + Console Output + Alerts
+```
+
+### Integration with Existing Pipeline
+
+Real-time data can feed into the existing RINSE cycle:
+
+```python
+from realtime_monitor import RealtimeMonitor
+from rinse_agent import RinseAgent
+
+# Start real-time monitor
+monitor = RealtimeMonitor(symbols=["BTCUSD"])
+
+# Connect to RINSE agent
+rinse = RinseAgent()
+
+async def on_snapshot(snapshot):
+    # Feed real-time data into RINSE cycle
+    if snapshot.liminal_state == "critical":
+        await rinse.reflect_on_state(snapshot)
+
+await monitor.run()
+```
+
 ## LiminalBD Integration
 
 Proto-liminal can integrate with [LiminalBD](https://github.com/safal207/LiminalBD) to leverage living cellular substrate for adaptive signal processing.
