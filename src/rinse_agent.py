@@ -15,6 +15,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+try:
+    from rinse_persistence import RINSEPersistence
+except ImportError:
+    RINSEPersistence = None
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -112,7 +117,8 @@ class RINSEAgent:
         self,
         reflection_threshold: float = 0.1,
         adjustment_magnitude: float = 0.15,
-        confidence_threshold: float = 0.6
+        confidence_threshold: float = 0.6,
+        db_path: Optional[str] = None
     ):
         """
         Initialize RINSE agent
@@ -121,6 +127,7 @@ class RINSEAgent:
             reflection_threshold: Minimum metric change to trigger reflection
             adjustment_magnitude: Maximum adjustment per cycle (0-1)
             confidence_threshold: Minimum confidence to apply adjustment
+            db_path: Optional path to SQLite database for persistent state
         """
         self.reflection_threshold = reflection_threshold
         self.adjustment_magnitude = adjustment_magnitude
@@ -152,7 +159,81 @@ class RINSEAgent:
             "adjustments_applied": 0
         }
 
+        # Persistence layer
+        self.db = None
+        if db_path:
+            if RINSEPersistence is None:
+                LOGGER.warning("RINSEPersistence not available, persistence disabled")
+            else:
+                self.db = RINSEPersistence(db_path)
+                self._load_state()
+                LOGGER.info(f"Persistent state enabled: {db_path}")
+
         LOGGER.info("RINSEAgent initialized")
+
+    def _load_state(self):
+        """Load state from database"""
+        if not self.db:
+            return
+
+        LOGGER.info("Loading state from database...")
+
+        # Load configuration
+        config = self.db.load_config()
+        if config:
+            self.reflection_threshold = config['reflection_threshold']
+            self.adjustment_magnitude = config['adjustment_magnitude']
+            self.confidence_threshold = config['confidence_threshold']
+            LOGGER.info("Configuration loaded from database")
+
+        # Load baseline and current metrics
+        self.baseline_metrics = self.db.load_baseline_metrics()
+        self.current_metrics = self.db.load_current_metrics()
+
+        # Load parameters
+        loaded_params = self.db.load_parameters()
+        if loaded_params:
+            self.parameters.update(loaded_params)
+
+        # Load accumulated feedback
+        loaded_feedback = self.db.load_accumulated_feedback()
+        if loaded_feedback:
+            self.accumulated_feedback = defaultdict(list, loaded_feedback)
+
+        # Load iteration number
+        self.iteration = self.db.get_latest_iteration()
+
+        LOGGER.info(f"State loaded: iteration={self.iteration}, "
+                   f"params={len(self.parameters)}, "
+                   f"baselines={len(self.baseline_metrics)}")
+
+    def _save_state(self):
+        """Save current state to database"""
+        if not self.db:
+            return
+
+        # Save configuration
+        self.db.save_config(
+            self.reflection_threshold,
+            self.adjustment_magnitude,
+            self.confidence_threshold
+        )
+
+        # Save metrics
+        if self.baseline_metrics:
+            self.db.save_baseline_metrics(self.baseline_metrics)
+        if self.current_metrics:
+            self.db.save_current_metrics(self.current_metrics)
+
+        # Save parameters
+        self.db.save_parameters(self.parameters, self.iteration)
+
+        # Save accumulated feedback
+        if self.accumulated_feedback:
+            self.db.save_accumulated_feedback(
+                dict(self.accumulated_feedback),
+                self.iteration
+            )
 
     def reflect(self, metrics: Dict[str, float]) -> Reflection:
         """
@@ -212,13 +293,25 @@ class RINSEAgent:
                 reflection_note = f"Iteration {self.iteration}: System performance stable. " + \
                                   "No significant deviations from baseline."
 
+        timestamp = datetime.now(timezone.utc).isoformat()
+
         reflection = Reflection(
             iteration=self.iteration,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=timestamp,
             observations=observations,
             insights=insights,
             reflection_note=reflection_note
         )
+
+        # Save reflection to database
+        if self.db:
+            self.db.save_reflection(
+                iteration=self.iteration,
+                timestamp=timestamp,
+                observations=observations,
+                insights=insights,
+                reflection_note=reflection_note
+            )
 
         LOGGER.info(f"Reflection complete: {len(insights)} insights generated")
 
@@ -386,6 +479,17 @@ class RINSEAgent:
 
                     adjustments.append(adjustment)
 
+                    # Save parameter change to database
+                    if self.db:
+                        self.db.save_parameter_change(
+                            parameter_name=param_name,
+                            old_value=old_value,
+                            new_value=new_value,
+                            iteration=self.iteration,
+                            reason=reason,
+                            confidence=confidence
+                        )
+
         # Apply adjustments
         if adjustments:
             for adjustment in adjustments:
@@ -454,6 +558,38 @@ class RINSEAgent:
 
         self.cycles.append(cycle)
         self.stats["cycles_completed"] += 1
+
+        # Save to database
+        if self.db:
+            # Save iteration record
+            self.db.save_iteration(self.iteration, cycle.timestamp)
+
+            # Save complete cycle
+            self.db.save_cycle(
+                iteration=self.iteration,
+                timestamp=cycle.timestamp,
+                reflection_note=cycle.reflection.reflection_note,
+                simulation_score=cycle.simulation_score,
+                evolution_applied=cycle.evolution_applied,
+                metadata=cycle.metadata
+            )
+
+            # Save adjustments
+            for adj in adjustments:
+                self.db.save_adjustment(
+                    iteration=self.iteration,
+                    target=adj.target,
+                    parameter=adj.parameter,
+                    old_value=adj.old_value,
+                    new_value=adj.new_value,
+                    reason=adj.reason,
+                    confidence=adj.confidence,
+                    applied=evolution_applied,
+                    metadata=adj.metadata
+                )
+
+            # Save current state
+            self._save_state()
 
         LOGGER.info(f"RINSE cycle {self.iteration} complete: {len(adjustments)} adjustments, applied={evolution_applied}")
 
@@ -532,6 +668,12 @@ class RINSEAgent:
         self.parameters[name] = value
         LOGGER.info(f"Parameter {name} set to {value}")
 
+    def close(self):
+        """Close database connection if open"""
+        if self.db:
+            self.db.close()
+            LOGGER.info("Database connection closed")
+
 
 def main():
     """CLI interface for RINSE agent"""
@@ -540,6 +682,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run RINSE self-improvement cycle")
     parser.add_argument("--metrics", required=True, help="Input metrics JSONL from feedback_tracker")
     parser.add_argument("--output", required=True, help="Output RINSE cycle JSONL")
+    parser.add_argument("--db", help="SQLite database for persistent state (optional)")
     parser.add_argument("--threshold", type=float, default=0.1, help="Reflection threshold")
     parser.add_argument("--magnitude", type=float, default=0.15, help="Adjustment magnitude")
     parser.add_argument("--verbose", action="store_true")
@@ -556,49 +699,67 @@ def main():
     # Create agent
     agent = RINSEAgent(
         reflection_threshold=args.threshold,
-        adjustment_magnitude=args.magnitude
+        adjustment_magnitude=args.magnitude,
+        db_path=args.db
     )
 
-    # Load metrics
-    metrics = agent.load_metrics_from_file(args.metrics)
+    try:
+        # Load metrics
+        metrics = agent.load_metrics_from_file(args.metrics)
 
-    if not metrics:
-        LOGGER.error("No metrics loaded")
-        return 1
+        if not metrics:
+            LOGGER.error("No metrics loaded")
+            return 1
 
-    # Run cycle
-    cycle = agent.run_cycle(metrics)
+        # Run cycle
+        cycle = agent.run_cycle(metrics)
 
-    # Save cycle
-    agent.save_cycle(cycle, args.output)
+        # Save cycle
+        agent.save_cycle(cycle, args.output)
 
-    # Print summary
-    print("\n" + "="*60)
-    print(f"RINSE Cycle {cycle.iteration} Summary")
-    print("="*60)
-    print(f"Timestamp:           {cycle.timestamp}")
-    print(f"Insights:            {len(cycle.reflection.insights)}")
-    print(f"Adjustments:         {len(cycle.adjustments)}")
-    print(f"Simulation score:    {cycle.simulation_score:.3f}")
-    print(f"Evolution applied:   {cycle.evolution_applied}")
+        # Print summary
+        print("\n" + "="*60)
+        print(f"RINSE Cycle {cycle.iteration} Summary")
+        print("="*60)
+        print(f"Timestamp:           {cycle.timestamp}")
+        print(f"Insights:            {len(cycle.reflection.insights)}")
+        print(f"Adjustments:         {len(cycle.adjustments)}")
+        print(f"Simulation score:    {cycle.simulation_score:.3f}")
+        print(f"Evolution applied:   {cycle.evolution_applied}")
 
-    if cycle.reflection.insights:
-        print("\nKey Insights:")
-        for insight in cycle.reflection.insights[:5]:
-            print(f"  • {insight}")
+        if cycle.reflection.insights:
+            print("\nKey Insights:")
+            for insight in cycle.reflection.insights[:5]:
+                print(f"  • {insight}")
 
-    if cycle.adjustments:
-        print("\nAdjustments Made:")
-        for adj in cycle.adjustments[:5]:
-            print(f"  • {adj.parameter}: {adj.old_value:.4f} → {adj.new_value:.4f}")
+        if cycle.adjustments:
+            print("\nAdjustments Made:")
+            for adj in cycle.adjustments[:5]:
+                print(f"  • {adj.parameter}: {adj.old_value:.4f} → {adj.new_value:.4f}")
 
-    print(f"\nReflection: {cycle.reflection.reflection_note}")
+        print(f"\nReflection: {cycle.reflection.reflection_note}")
 
-    stats = agent.get_stats()
-    print(f"\nTotal cycles: {stats['cycles_completed']}")
-    print(f"Total adjustments: {stats['adjustments_applied']}")
+        stats = agent.get_stats()
+        print(f"\nTotal cycles: {stats['cycles_completed']}")
+        print(f"Total adjustments: {stats['adjustments_applied']}")
 
-    return 0
+        # Show database summary if persistence enabled
+        if agent.db:
+            summary = agent.db.get_summary()
+            print("\n" + "="*60)
+            print("Database Summary")
+            print("="*60)
+            print(f"Total iterations:    {summary['latest_iteration']}")
+            print(f"Cycles recorded:     {summary['rinse_cycles_count']}")
+            print(f"Reflections:         {summary['reflections_count']}")
+            print(f"Adjustments:         {summary['adjustments_count']}")
+            print(f"Parameter changes:   {summary['parameter_history_count']}")
+
+        return 0
+
+    finally:
+        # Always close database connection
+        agent.close()
 
 
 if __name__ == "__main__":
